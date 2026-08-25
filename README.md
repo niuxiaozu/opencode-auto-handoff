@@ -1,10 +1,25 @@
 # opencode-auto-handoff
 
-OpenCode 会话自动交接技能（Skill）—— 为长任务、高上下文消耗的会话提供自动接力能力。
+面向 **OhMyOpenCode（OMO）+ OpenChamber** 工作流的会话自动交接技能——为长任务、高上下文消耗的会话提供自动接力能力。
 
 当任务较大、耗时长、上下文占用率高时，本技能会在恰当的时机生成**交接摘要**并开新会话接手，同时彻底清理旧会话的系统状态（goal / todo / continuation / 定时任务），确保旧会话不会被系统反复拉起、也不会与新会话争抢同一批文件。
 
 ## 适用场景
+
+### 适用前提（设计边界）
+
+本技能的目标用户是 **OhMyOpenCode（OMO）+ OpenChamber** 工作流的使用者，**并非通用 OpenCode 技能**。设计之初就直接建立在这套环境的能力之上——下表不是"安装时的附加要求"，而是**适用场景本身自带的边界**：
+
+| 组件 | 提供的能力 | 在技能中的作用 |
+|---|---|---|
+| **OhMyOpenCode**（OMO） | `goal` 机制（`/goal` 命令、`create_goal`/`get_goal`/`update_goal` 工具）；`/stop-continuation`（ralph loop / boulder / todo continuation） | 交接后关闭 goal、停止续跑——防止旧会话被系统拉起继续工作 |
+| **OpenChamber** | `session.create` / `session.send` / `session.fork` | 开新会话，并把交接摘要一次注入 |
+| OpenCode 本体 | 技能运行载体 | 宿主 |
+| PowerShell | 上下文占用率脚本 `scripts/calc_ctx_use_rate.ps1` | 仅"持续工作模式（场景 A）"的自动监测需要 |
+
+其中 **`goal` 与 `/stop-continuation` 由 OMO 提供、会话创建由 OpenChamber 提供，均不是原生 OpenCode 能力**——它们正是本技能能"自动交接 + 防止旧会话复活"的根基。脱离这套环境使用，技能会退化为纯摘要输出模式（见[与 OpenChamber / OhMyOpenCode 的关系](#与-openchamber--ohmyopencode-的关系)），那是越过了设计边界，而非配置缺失。
+
+本技能适用的具体场景：
 
 - **长时间持续开发**：任务较大、耗时较久，用户明确表达"一直做不要停""持续工作"等长期跟进意向。
 - **上下文接近上限**：单会话上下文占用率达到阈值（脚本自动监测，见[上下文占用率脚本](#上下文占用率脚本可选)）。
@@ -20,25 +35,6 @@ OpenCode 会话自动交接技能（Skill）—— 为长任务、高上下文�
 - **被拉起防御**：已交接的会话无论以何种方式被再次拉起，都会识别自身已交接状态，拒绝工作并再次清理。
 
 ## 安装方式
-
-### 环境要求
-
-> ⚠️ **重要：本技能依赖的组件大多不是原版 OpenCode 自带的功能，环境要求偏高。请先逐条确认下表，全部满足再安装。**
-
-| 组件 | 提供的能力 | 是否必需 |
-|---|---|---|
-| **OhMyOpenCode**（OMO） | `goal` 机制（`/goal` 命令、`create_goal`/`get_goal`/`update_goal` 工具）；continuation 控制（`/stop-continuation`，管理 ralph loop / boulder / todo continuation） | ✅ 必需，缺了交接后的 goal 清理与续跑控制就无法执行 |
-| **OpenChamber** | `session.create` / `session.send` / `session.fork`：开新会话并注入交接摘要 | ✅ 必需（否则退化为手动交接） |
-| OpenCode 本体 | 技能运行载体 | ✅ 必需 |
-| PowerShell | 上下文占用率脚本 `scripts/calc_ctx_use_rate.ps1` | ⚠️ 仅"持续工作模式（场景 A）"的自动监测需要 |
-
-**"苛刻"具体体现在三处，请逐条确认你的环境确实具备：**
-
-1. **`goal` 不是 OpenCode 原生的** —— 它是 **OhMyOpenCode（OMO）** 提供的线程目标机制。原版 OpenCode 没有 `/goal`，也没有 `create_goal` / `get_goal` / `update_goal` 工具。
-2. **创建会话不是 OpenCode 原生的** —— 它是 **OpenChamber** 的能力。原版 OpenCode 无法用 `session.create` 开新会话、`session.send` 注入摘要。
-3. **`/stop-continuation` 同样来自 OMO**（停止 ralph loop / boulder / todo continuation 的续跑机制）。
-
-若你的环境不是「OhMyOpenCode + OpenChamber」组合，技能不会报错，但会**静默退化为纯摘要输出模式**：仍会生成交接摘要，但无法自动关闭 goal、无法自动创建/注入新会话、无法停止 continuation，只能把摘要交给用户手动开新会话粘贴，旧会话的清理也需人工干预。
 
 ### 1. 获取技能文件
 
@@ -168,12 +164,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\calc_ctx_use_rate.p
 
 ### 与 OpenChamber / OhMyOpenCode 的关系
 
-本技能的核心动作分属两个不同系统，**均非 OpenCode 原生功能**：
+本技能的核心动作分属两个不同系统，**这正是[适用前提](#适用前提设计边界)所依赖的能力**：
 
 - **goal 机制（`/goal`、`create_goal`/`get_goal`/`update_goal`）与 `/stop-continuation`** → 由 **OhMyOpenCode（OMO）** 提供，用于交接后的系统状态清理与续跑控制。
 - **会话创建与注入（`session.create` / `session.send`）** → 由 **OpenChamber** 提供，用于把交接摘要送进新会话。
 
-若任一缺失，技能自动退化为"纯摘要输出"模式：助手将交接摘要直接输出给用户、由用户手动开新会话粘贴，且无法自动清理旧会话的 goal / todo / continuation。
+若脱离此环境，技能退化为"纯摘要输出"模式：助手将交接摘要直接输出给用户、由用户手动开新会话粘贴，且无法自动清理旧会话的 goal / todo / continuation。
 
 ## License
 
